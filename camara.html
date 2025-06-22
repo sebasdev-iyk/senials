@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detección de Manos con MediaPipe</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+        }
+        
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        .video-container {
+            position: relative;
+            display: inline-block;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+        
+        #videoElement {
+            width: 640px;
+            height: 480px;
+            transform: scaleX(-1);
+        }
+        
+        #canvasElement {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 640px;
+            height: 480px;
+            transform: scaleX(-1);
+        }
+        
+        .controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+        
+        button {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 0 10px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .status {
+            color: white;
+            margin-top: 15px;
+            font-size: 18px;
+            text-align: center;
+        }
+        
+        .info {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🖐️ Detección de Manos con MediaPipe</h1>
+        
+        <div class="video-container">
+            <video id="videoElement" autoplay muted playsinline></video>
+            <canvas id="canvasElement"></canvas>
+        </div>
+        
+        <div class="controls">
+            <button id="startButton">Iniciar Cámara</button>
+            <button id="stopButton" disabled>Detener</button>
+        </div>
+        
+        <div class="status" id="status">Presiona "Iniciar Cámara" para comenzar</div>
+        
+        <div class="info">
+            <strong>Instrucciones:</strong><br>
+            • Coloca tu mano frente a la cámara<br>
+            • Los puntos rojos muestran las articulaciones<br>
+            • Las líneas azules conectan los dedos<br>
+            • Funciona con una o ambas manos
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mediapipe/0.10.0/hands.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mediapipe/0.10.0/camera_utils.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mediapipe/0.10.0/drawing_utils.min.js"></script>
+
+    <script>
+        const videoElement = document.getElementById('videoElement');
+        const canvasElement = document.getElementById('canvasElement');
+        const canvasCtx = canvasElement.getContext('2d');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const status = document.getElementById('status');
+
+        let camera = null;
+        let hands = null;
+
+        // Configurar MediaPipe Hands
+        function initializeMediaPipe() {
+            hands = new Hands({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+                }
+            });
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults(onResults);
+        }
+
+        // Función que maneja los resultados de detección
+        function onResults(results) {
+            // Limpiar canvas
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            // Dibujar la imagen del video
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    // Dibujar conexiones de la mano
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {
+                        color: '#00FF00',
+                        lineWidth: 5
+                    });
+                    
+                    // Dibujar puntos de referencia
+                    drawLandmarks(canvasCtx, landmarks, {
+                        color: '#FF0000',
+                        lineWidth: 2,
+                        radius: 5
+                    });
+                }
+                
+                status.textContent = `Detectadas ${results.multiHandLandmarks.length} mano(s)`;
+            } else {
+                status.textContent = 'No se detectaron manos - Muestra tu mano a la cámara';
+            }
+            
+            canvasCtx.restore();
+        }
+
+        // Función para dibujar conexiones
+        function drawConnectors(ctx, landmarks, connections, style) {
+            ctx.strokeStyle = style.color;
+            ctx.lineWidth = style.lineWidth;
+            
+            for (const connection of connections) {
+                const start = landmarks[connection[0]];
+                const end = landmarks[connection[1]];
+                
+                ctx.beginPath();
+                ctx.moveTo(start.x * canvasElement.width, start.y * canvasElement.height);
+                ctx.lineTo(end.x * canvasElement.width, end.y * canvasElement.height);
+                ctx.stroke();
+            }
+        }
+
+        // Función para dibujar puntos de referencia
+        function drawLandmarks(ctx, landmarks, style) {
+            ctx.fillStyle = style.color;
+            ctx.strokeStyle = style.color;
+            ctx.lineWidth = style.lineWidth;
+            
+            for (const landmark of landmarks) {
+                const x = landmark.x * canvasElement.width;
+                const y = landmark.y * canvasElement.height;
+                
+                ctx.beginPath();
+                ctx.arc(x, y, style.radius, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.stroke();
+            }
+        }
+
+        // Configurar cámara
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480 }
+                });
+                
+                videoElement.srcObject = stream;
+                
+                camera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        await hands.send({ image: videoElement });
+                    },
+                    width: 640,
+                    height: 480
+                });
+                
+                camera.start();
+                
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                status.textContent = 'Cámara iniciada - Muestra tu mano';
+                
+            } catch (err) {
+                console.error('Error al acceder a la cámara:', err);
+                status.textContent = 'Error: No se pudo acceder a la cámara';
+            }
+        }
+
+        // Detener cámara
+        function stopCamera() {
+            if (camera) {
+                camera.stop();
+            }
+            
+            if (videoElement.srcObject) {
+                const tracks = videoElement.srcObject.getTracks();
+                tracks.forEach(track => track.stop());
+                videoElement.srcObject = null;
+            }
+            
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            status.textContent = 'Cámara detenida';
+        }
+
+        // Definir conexiones de la mano (basado en MediaPipe)
+        const HAND_CONNECTIONS = [
+            [0, 1], [1, 2], [2, 3], [3, 4],     // Pulgar
+            [0, 5], [5, 6], [6, 7], [7, 8],     // Índice
+            [5, 9], [9, 10], [10, 11], [11, 12], // Medio
+            [9, 13], [13, 14], [14, 15], [15, 16], // Anular
+            [13, 17], [17, 18], [18, 19], [19, 20], // Meñique
+            [0, 17]                               // Palma
+        ];
+
+        // Event listeners
+        startButton.addEventListener('click', startCamera);
+        stopButton.addEventListener('click', stopCamera);
+
+        // Configurar dimensiones del canvas
+        canvasElement.width = 640;
+        canvasElement.height = 480;
+
+        // Inicializar MediaPipe cuando se carga la página
+        window.addEventListener('load', () => {
+            initializeMediaPipe();
+        });
+    </script>
+</body>
+</html>
