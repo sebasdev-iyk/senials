@@ -1,98 +1,262 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MediaPipe Hands - Web</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Detección de Manos con MediaPipe</title>
+
+    <!-- MediaPipe Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+    <!-- TensorFlow.js -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.18.0/dist/tf.min.js"></script>
+
     <style>
         #output_canvas {
             transform: scaleX(-1); /* Espejo para efecto espejo */
         }
+
         .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+        }
+
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .video-container {
             position: relative;
             width: 100%;
             max-width: 720px;
         }
-        .camera-feed, .output-canvas {
+
+        #videoElement, #canvasElement {
+            width: 640px;
+            height: 480px;
+            transform: scaleX(-1);
+        }
+
+        #canvasElement {
             position: absolute;
             left: 0;
-            top: 0;
+        }
+
+        .controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        button {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 0 10px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            color: white;
+            margin-top: 15px;
+            font-size: 18px;
+            text-align: center;
+        }
+
+        .info {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            color: white;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <video class="camera-feed" id="input_video" autoplay playsinline></video>
-        <canvas class="output-canvas" id="output_canvas" width="720" height="480"></canvas>
+        <h1>🖐️ Detección de Manos con MediaPipe</h1>
+
+        <div class="video-container">
+            <video id="videoElement" autoplay muted playsinline></video>
+            <canvas id="canvasElement"></canvas>
+        </div>
+
+        <div class="controls">
+            <button id="startButton">Iniciar Cámara</button>
+            <button id="stopButton" disabled>Detener</button>
+        </div>
+
+        <div class="status" id="status">Presiona "Iniciar Cámara" para comenzar</div>
+
+        <div class="info">
+            <strong>Instrucciones:</strong><br>
+            • Coloca tu mano frente a la cámara<br>
+            • Los puntos rojos muestran las articulaciones<br>
+            • Las líneas verdes conectan los dedos<br>
+            • Se mostrará la seña reconocida automáticamente
+        </div>
     </div>
-    <p id="status">Inicializando...</p>
 
     <script>
-        const videoElement = document.getElementById('input_video');
-        const canvasElement = document.getElementById('output_canvas');
+        const videoElement = document.getElementById('videoElement');
+        const canvasElement = document.getElementById('canvasElement');
         const canvasCtx = canvasElement.getContext('2d');
-        const statusElement = document.getElementById('status');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const status = document.getElementById('status');
 
-        // 1. Configurar MediaPipe Hands
-        const hands = new Hands({
-            locateFile: (file) => {
-                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        let camera = null;
+        let hands = null;
+        let modelo = null;
+
+        const CLASES = Array.from({length: 29}, (_, i) => `seña ${i}`);
+
+        async function cargarModelo() {
+            modelo = await tf.loadLayersModel('modelo/model.json');
+            console.log("✅ Modelo cargado");
+        }
+
+        function drawConnectors(ctx, landmarks, connections, style) {
+            ctx.strokeStyle = style.color;
+            ctx.lineWidth = style.lineWidth;
+            for (const connection of connections) {
+                const start = landmarks[connection[0]];
+                const end = landmarks[connection[1]];
+                ctx.beginPath();
+                ctx.moveTo(start.x * canvasElement.width, start.y * canvasElement.height);
+                ctx.lineTo(end.x * canvasElement.width, end.y * canvasElement.height);
+                ctx.stroke();
             }
-        });
+        }
 
-        hands.setOptions({
-            selfieMode: true,
-            maxNumHands: 2,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
-        });
+        function drawLandmarks(ctx, landmarks, style) {
+            ctx.fillStyle = style.color;
+            for (const landmark of landmarks) {
+                const x = landmark.x * canvasElement.width;
+                const y = landmark.y * canvasElement.height;
+                ctx.beginPath();
+                ctx.arc(x, y, style.radius, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
 
-        // 2. Procesar resultados
-        hands.onResults((results) => {
-            statusElement.innerText = "Detección activa";
-            
+        const HAND_CONNECTIONS = [
+            [0, 1], [1, 2], [2, 3], [3, 4],
+            [0, 5], [5, 6], [6, 7], [7, 8],
+            [5, 9], [9, 10], [10, 11], [11, 12],
+            [9, 13], [13, 14], [14, 15], [15, 16],
+            [13, 17], [17, 18], [18, 19], [19, 20],
+            [0, 17]
+        ];
+
+        function onResults(results) {
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            canvasCtx.drawImage(
-                results.image, 0, 0, canvasElement.width, canvasElement.height);
-            
-            // Dibujar landmarks si se detectan manos
-            if (results.multiHandLandmarks) {
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && modelo) {
                 for (const landmarks of results.multiHandLandmarks) {
-                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, 
-                        {color: '#00FF00', lineWidth: 5});
-                    drawLandmarks(canvasCtx, landmarks, 
-                        {color: '#FF0000', lineWidth: 2});
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 4 });
+                    drawLandmarks(canvasCtx, landmarks, { color: '#FF0000', radius: 5 });
+
+                    const input = landmarks.flatMap(p => [p.x, p.y, p.z]);
+                    const tensor = tf.tensor(input, [1, 63]);
+
+                    const pred = modelo.predict(tensor);
+                    pred.array().then(res => {
+                        const predicciones = res[0];
+                        const maxIndex = predicciones.indexOf(Math.max(...predicciones));
+                        const confianza = predicciones[maxIndex];
+                        const clase = CLASES[maxIndex] || `Clase ${maxIndex}`;
+                        status.textContent = `🖐️ ${clase} (${(confianza * 100).toFixed(1)}%)`;
+                    });
                 }
-                statusElement.innerText = `Manos detectadas: ${results.multiHandLandmarks.length}`;
             } else {
-                statusElement.innerText = "Acerca tu mano a la cámara...";
+                status.textContent = "No se detectaron manos - Muestra tu mano";
             }
-            
+
             canvasCtx.restore();
-        });
+        }
 
-        // 3. Configurar cámara
-        const camera = new Camera(videoElement, {
-            onFrame: async () => {
-                await hands.send({image: videoElement});
-            },
-            width: 720,
-            height: 480
-        });
+        function initializeMediaPipe() {
+            hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+            hands.onResults(onResults);
+        }
 
-        // 4. Manejar errores
-        camera.start().then(() => {
-            statusElement.innerText = "Cámara iniciada";
-        }).catch((error) => {
-            statusElement.innerHTML = `Error: ${error}<br>Requerimientos:<br>
-                - Usar HTTPS/localhost<br>
-                - Permitir acceso a cámara<br>
-                - Navegador compatible (Chrome, Edge, Firefox)`;
-            console.error("Error en cámara:", error);
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+                videoElement.srcObject = stream;
+
+                camera = new Camera(videoElement, {
+                    onFrame: async () => await hands.send({ image: videoElement }),
+                    width: 640,
+                    height: 480
+                });
+
+                camera.start();
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                status.textContent = 'Cámara iniciada - Muestra tu mano';
+            } catch (err) {
+                console.error('Error al acceder a la cámara:', err);
+                status.textContent = 'Error: No se pudo acceder a la cámara';
+            }
+        }
+
+        function stopCamera() {
+            if (camera) camera.stop();
+            if (videoElement.srcObject) {
+                videoElement.srcObject.getTracks().forEach(track => track.stop());
+                videoElement.srcObject = null;
+            }
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            status.textContent = 'Cámara detenida';
+        }
+
+        canvasElement.width = 640;
+        canvasElement.height = 480;
+
+        startButton.addEventListener('click', startCamera);
+        stopButton.addEventListener('click', stopCamera);
+        window.addEventListener('load', () => {
+            initializeMediaPipe();
+            cargarModelo();
         });
     </script>
 </body>
